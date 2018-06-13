@@ -22,10 +22,10 @@ install_aliases()
 # END py2 compatibility cruft
 #
 
-import websockets
+import websocket
 import ssl
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 import json
 from urllib.parse import urlparse,quote
@@ -41,11 +41,12 @@ def quiet():
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+
 class edgeos_webstream:
 
-    def __init__(self, ws, session_id):
+    def __init__(self, ws, session):
         self._ws = ws
-        self._session_id = session_id
+        self._session = session
         self._buffer = BytesIO()
 
     def send(self, data):
@@ -54,7 +55,7 @@ class edgeos_webstream:
         self._ws.send(foo2)
 
     def subscribe(self, subs=["export", "discover","interfaces","system-stats","num-routes","config-change", "users", "pon-stats"]):
-        data = {'SUBSCRIBE': [{'name': x} for x in subs], 'UNSUBSCRIBE': [], 'SESSION_ID': self._session_id }
+        data = {'SUBSCRIBE': [{'name': x} for x in subs], 'UNSUBSCRIBE': [], 'SESSION_ID': self._session.session_id }
         self.send(data)
 
     @property
@@ -84,6 +85,7 @@ class edgeos_webstream:
         
     def next(self):
         # read and return the next record from the stream
+        self._session.heartbeat()
         if not self._buffer_len():
             # if the buffer is empty then make a read
             self._buffer_add()
@@ -106,12 +108,15 @@ class edgeos_web(requests.Session):
         self._endpoint = endpoint
         self._username = username
         self._password = password
+        self._last_valid = datetime.fromtimestamp(100000)
         if not verify:
             # suppress warnings
             quiet()
 
     def login(self):
-        return self.post(self._endpoint, data={'username':self._username, 'password': self._password})
+        out = self.post(self._endpoint, data={'username':self._username, 'password': self._password})
+        out.raise_for_status()
+        return out
 
     @property
     def session_id(self):
@@ -125,6 +130,40 @@ class edgeos_web(requests.Session):
     def cookies_as_str(self):
         return '; '.join(["{}={}".format(*x) for x in self.cookies.items()])
 
+    def create_websocket(self, timeout=60):
+        # Spawn a websockt on this connection
+        if self.verify:
+            ws = websocket.create_connection(self.wsurl, origin=self._endpoint, timeout=timeout, cookie=self.cookies_as_str())
+        else:
+            ws = websocket.create_connection(self.wsurl, sslopt={"cert_reqs": ssl.CERT_NONE}, origin=self._endpoint, timeout=timeout, cookie=self.cookies_as_str())            
+        return edgeos_webstream(ws,self)
 
-         
+    def _data(self, item):
+        out = self.get(self._endpoint+'/api/edge/data.json?data='+item)
+        out.raise_for_status()
+        try:
+            data = out.json()
+            if data['success'] == 0:
+                raise Exception(data['error'])
+            return data['output']
+        except:
+            raise
 
+    def dhcp_leases(self):
+        return self._data('dhcp_leases')
+
+    def dhcp_stats(self):
+        return self._data('dhcp_stats')
+
+    def routes(self):
+        return self._data('routes')
+
+    def sys_info(self):
+        return self._data('sys_info')
+
+    def heartbeat(self, max_age=15):
+        ts = datetime.now()
+        if ( datetime.now() - self._last_valid ) > timedelta(seconds=max_age):
+            out = self.get(self._endpoint + '/api/edge/heartbeat.json?t=' + str(int(ts.timestamp())))
+            out.raise_for_status()
+            self._last_valid = ts

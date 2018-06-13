@@ -11,9 +11,7 @@ s.post(edgeos_url+'/api/auth.json', json={'username':username, 'password': passw
 session_id = s.session_id
 print(session_id)
 
-cookie = '; '.join(["{}={}".format(*x) for x in s.cookies.items()])
-
-ws = websocket.create_connection(s.wsurl, sslopt={"cert_reqs": ssl.CERT_NONE}, origin=s._endpoint, timeout=20, cookie=cookie)
+ws = websocket.create_connection(s.wsurl, sslopt={"cert_reqs": ssl.CERT_NONE}, origin=s._endpoint, timeout=60, cookie=s.cookies_as_str())
 ews = edgeos_webstream(ws,s.session_id)
 print(ews.status)
 print(ews.subscribe())

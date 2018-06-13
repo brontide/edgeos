@@ -53,7 +53,7 @@ class edgeos_webstream:
         foo2 =  "{}\n{}".format(len(foo), foo)
         self._ws.send(foo2)
 
-    def subscribe(self, subs=["export", "discover","interfaces","system-stats","num-routes","config-change","users", "pon-stats"]):
+    def subscribe(self, subs=["export", "discover","interfaces","system-stats","num-routes","config-change", "users", "pon-stats"]):
         data = {'SUBSCRIBE': [{'name': x} for x in subs], 'UNSUBSCRIBE': [], 'SESSION_ID': self._session_id }
         self.send(data)
 
@@ -90,7 +90,13 @@ class edgeos_webstream:
         # convert the line to int
         payload_len = int(self._buffer.readline())
         # make sure we have enough to fulfill the read
-        return json.loads(self._buffer_read(payload_len))
+        raw = self._buffer_read(payload_len)
+        #print(raw)
+        try:
+            return json.loads(raw)
+        except:
+            # because the USG returns malformed json
+            return {'x_invalid_json': raw}
 
 class edgeos_web(requests.Session):
 
@@ -115,5 +121,10 @@ class edgeos_web(requests.Session):
     def wsurl(self):
         p = urlparse(self._endpoint)
         return 'wss://{}/ws/stats'.format(p.netloc)
+
+    def cookies_as_str(self):
+        return '; '.join(["{}={}".format(*x) for x in self.cookies.items()])
+
+
          
 

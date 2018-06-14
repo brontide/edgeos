@@ -69,6 +69,7 @@ def process_interfaces(x):
     return json
 
 ip2mac = {}
+#ip2client_hostname = {}
 ip2name = {}
 
 def process_dhcp():
@@ -78,6 +79,14 @@ def process_dhcp():
         for ip, lease in lan.items():
             ip2mac[ip] = lease['mac']
             ip2name[ip] = lease['client-hostname']
+            if ip2name[ip] == "":
+                ip2name[ip] = ip
+    #for ip in ip2mac:
+        # proper name lookup
+        # 1. Noted names in unifi
+        # 2. client-hostname from lease
+        # 3. ipaddress
+
 
 def ip_to_mac(ip):
     if ip in ip2mac:

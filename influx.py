@@ -1,6 +1,6 @@
 from influxdb import InfluxDBClient
 from edgeos import edgeos_webstream, edgeos_web
-from time import sleep
+from time import sleep, time
 
 from secret import edgeos_url,username,password
 
@@ -34,7 +34,7 @@ client.switch_database('edgeos')
 
 ews = s.create_websocket()
 print(ews.status)
-print(ews.subscribe(subs=['interfaces','system-stats','export']))
+print(ews.subscribe(subs=['interfaces','system-stats','export', 'users']))
 
 sys_stat_fields = [ 'cpu', 'mem', 'uptime' ]
 
@@ -53,6 +53,20 @@ if_fields = [
 
 ]
 
+dups = {}
+def is_dup(point):
+    cts = time()
+    _id = [ point['measurement'] ]
+    _id.extend( point['tags'].values() )
+    xid = '-'.join(_id)
+    yid = '-'.join( map(str, point['fields'].values()) )
+    if xid in dups:
+        ( ts, cyid ) = dups[xid]
+        if cyid == yid and (cts-ts)<60:
+            return True
+    dups[xid] = (cts, yid)
+    return False
+
 def process_interfaces(x):
     json = []
     for interface, data in x.items():
@@ -65,7 +79,8 @@ def process_interfaces(x):
                 (field_name, int(data['stats'][field_name])) for field_name in if_fields
             )
         }
-        json.append(temp)
+        if not is_dup(temp):
+            json.append(temp)
     return json
 
 ip2mac = {}
@@ -126,24 +141,56 @@ def process_export(x):
                     'tx_bytes': int(stats['tx_bytes']),
                 }
             }
+            if not is_dup(temp):
+                json.append(temp)
+    return json
+
+def process_users(x):
+    json = []
+    for key, value in x.items():
+        temp = {
+                'measurement': 'user-count',
+                'tags': {
+                    'key': key
+                    },
+                'fields': {
+                    'value': len(value)
+                    }
+                }
+        if not is_dup(temp):
             json.append(temp)
     return json
 
 while True:
-    x = ews.next()
+    try:
+        x = ews.next()
+    except:
+        print("Exception caught")
+        s = edgeos_web(edgeos_url, username=username,password=password, verify=False)
+        s.login()
+        sleep(5)
+        x = {}
+
     if 'system-stats' in x:
         json = process_system_stats(x['system-stats'])
         while not client.write_points(json, tags=default_tags):
             sleep(1)
-        continue
-    if 'interfaces' in x:
+        print("S", end="", flush=True)
+    elif 'interfaces' in x:
         json = process_interfaces(x['interfaces'])
         while not client.write_points(json, tags=default_tags):
             sleep(1)
-        continue
-    if 'export' in x:
+        print("I", end="", flush=True)
+    elif 'export' in x:
         json = process_export(x['export'])
         while not client.write_points(json, tags=default_tags):
             sleep(1)
-        continue        
-    print(x)
+        print("X", end="", flush=True)
+    elif 'users' in x:
+        json = process_users(x['users'])
+        while not client.write_points(json, tags=default_tags):
+            sleep(1)
+        print("U", end="", flush=True)
+    else:
+        print(x)
+

@@ -17,7 +17,7 @@ sleep(5)
 
 ews = s.create_websocket()
 print(ews.status)
-print(ews.subscribe(subs=['interfaces','system-stats']))
+print(ews.subscribe())
 while True:
     x = ews.next()
     print(x)

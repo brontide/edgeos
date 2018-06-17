@@ -26,7 +26,7 @@ import websocket
 import ssl
 import requests
 from datetime import datetime, timedelta
-from io import BytesIO
+from io import StringIO
 import json
 from urllib.parse import urlparse,quote
 
@@ -47,7 +47,6 @@ class edgeos_webstream:
     def __init__(self, ws, session):
         self._ws = ws
         self._session = session
-        self._buffer = BytesIO()
 
     def send(self, data):
         foo = json.dumps(data,separators=(',', ':'))
@@ -62,43 +61,21 @@ class edgeos_webstream:
     def status(self):
         return self._ws.status
 
-    def _buffer_len(self):
-        # amount of data waiting to be read
-        return len(self._buffer.getbuffer()) - self._buffer.tell()
-
-    def _buffer_add(self):
-        pos = self._buffer.tell()
-        self._buffer.write(self._ws.recv().encode())
-        self._buffer.seek(pos)
-    
-    def _buffer_read(self, length):
-        while self._buffer_len() < length:
-            self._buffer_add()
-        # decode the payload
-        data = self._buffer.read(length).decode()
-        # If the buffer is empty reset it
-        if not self._buffer_len():
-            # It's empty
-            self._buffer.seek(0)
-            self._buffer.truncate(0)
-        return data
-        
     def next(self):
         # read and return the next record from the stream
         self._session.heartbeat()
-        if not self._buffer_len():
-            # if the buffer is empty then make a read
-            self._buffer_add()
-        # convert the line to int
-        payload_len = int(self._buffer.readline())
-        # make sure we have enough to fulfill the read
-        raw = self._buffer_read(payload_len)
-        #print(raw)
+        buf = StringIO(self._ws.recv())
+        payload_len = int(buf.readline())
+        payload = StringIO(buf.read())
+        payload.seek(0, 2)
+        while payload.tell() < payload_len:
+            payload.write(self._ws.recv())
+            payload.seek(0, 2)
+        payload.seek(0)
         try:
-            return json.loads(raw)
+            return json.loads(payload.getvalue())
         except:
-            # because the USG returns malformed json
-            return {'x_invalid_json': raw}
+            return {'x_invalid': payload.getvalue() }
 
 class edgeos_web(requests.Session):
 

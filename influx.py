@@ -2,16 +2,10 @@ from influxdb import InfluxDBClient
 from edgeos import edgeos_webstream, edgeos_web
 from time import sleep, time
 
-from secret import edgeos_url,username,password
+from secret import edgeos_url,username,password, mac2name
 
 s = edgeos_web(edgeos_url, username=username,password=password, verify=False)
 s.login()
-usg_token = ""
-try:
-    out = s.post(edgeos_url+'/api/auth.json', json={'username':username, 'password': password})
-    usg_token = out.json()['token']
-except:
-    pass 
 
 print("Sleeping 5 to make sure the session id {} is in the filesystem".format(s.session_id))
 sleep(5)
@@ -50,7 +44,6 @@ def process_system_stats(x):
 if_fields = [
     'rx_packets', 'rx_bytes', 'rx_errors', 'rx_dropped', 
     'tx_packets', 'tx_bytes', 'tx_errors', 'tx_dropped', 
-
 ]
 
 dups = {}
@@ -93,14 +86,12 @@ def process_dhcp():
         if not lan: continue
         for ip, lease in lan.items():
             ip2mac[ip] = lease['mac']
-            ip2name[ip] = lease['client-hostname']
+            if lease['mac'] in mac2name:
+                ip2name[ip] = mac2name[lease['mac']]
+            else:
+                ip2name[ip] = lease['client-hostname']
             if ip2name[ip] == "":
                 ip2name[ip] = ip
-    #for ip in ip2mac:
-        # proper name lookup
-        # 1. Noted names in unifi
-        # 2. client-hostname from lease
-        # 3. ipaddress
 
 
 def ip_to_mac(ip):
@@ -132,7 +123,7 @@ def process_export(x):
             temp = {
                'measurement': 'dpi',
                'tags': {
-                    'name': name,
+                   'name': "{}-{}".format(mac[-8:],name),
                     'mac': mac,
                     'application': application,
                 },
@@ -159,38 +150,50 @@ def process_users(x):
                 }
         if not is_dup(temp):
             json.append(temp)
+        if key == 'l2tp':
+            for vpn in value:
+                for user, stuff in vpn.items():
+                    ip2name[stuff['remote-ip']] = "{}-{}".format(user, stuff['interface'])
     return json
 
 while True:
+    if not s:
+        try:
+            s = edgeos_web(edgeos_url, username=username,password=password, verify=False)
+            s.login()
+            sleep(2)
+            ews = s.create_websocket()
+            ews.subscribe(subs=['interfaces','system-stats','export', 'users'])
+        except:
+            pass
     try:
         x = ews.next()
-    except:
-        print("Exception caught")
-        s = edgeos_web(edgeos_url, username=username,password=password, verify=False)
-        s.login()
+        if 'system-stats' in x:
+            json = process_system_stats(x['system-stats'])
+            while not client.write_points(json, tags=default_tags):
+                sleep(1)
+            #print("S", end="", flush=True)
+        elif 'interfaces' in x:
+            json = process_interfaces(x['interfaces'])
+            while not client.write_points(json, tags=default_tags):
+                sleep(1)
+            #print("I", end="", flush=True)
+        elif 'export' in x:
+            json = process_export(x['export'])
+            while not client.write_points(json, tags=default_tags):
+                sleep(1)
+            #print("X", end="", flush=True)
+        elif 'users' in x:
+            json = process_users(x['users'])
+            while not client.write_points(json, tags=default_tags):
+                sleep(1)
+            #print("U", end="", flush=True)
+        else:
+            pass
+            #print(x)
+    except Exception as e:
+        #raise
+        print(f"Exception caught {e}")
+        s = None
         sleep(5)
-        x = {}
-
-    if 'system-stats' in x:
-        json = process_system_stats(x['system-stats'])
-        while not client.write_points(json, tags=default_tags):
-            sleep(1)
-        print("S", end="", flush=True)
-    elif 'interfaces' in x:
-        json = process_interfaces(x['interfaces'])
-        while not client.write_points(json, tags=default_tags):
-            sleep(1)
-        print("I", end="", flush=True)
-    elif 'export' in x:
-        json = process_export(x['export'])
-        while not client.write_points(json, tags=default_tags):
-            sleep(1)
-        print("X", end="", flush=True)
-    elif 'users' in x:
-        json = process_users(x['users'])
-        while not client.write_points(json, tags=default_tags):
-            sleep(1)
-        print("U", end="", flush=True)
-    else:
-        print(x)
-
+        continue
